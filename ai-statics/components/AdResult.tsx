@@ -8,8 +8,7 @@ interface Props {
 }
 
 export default function AdResult({ result }: Props) {
-  const { imageBase64, laneId, headline, subline, caption } = result;
-  const dataUrl = `data:image/png;base64,${imageBase64}`;
+  const { imageUrl, laneId, headline, subline, caption } = result;
 
   return (
     <div className="border border-white/10 rounded-xl overflow-hidden">
@@ -20,15 +19,16 @@ export default function AdResult({ result }: Props) {
       </div>
 
       <div className="p-4 space-y-3">
-        {imageBase64 ? (
+        {imageUrl ? (
           <div className="relative">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={dataUrl} alt={`${STAGE_LABEL[laneId]} ad`} className="w-full rounded-lg" />
+            <img src={imageUrl} alt={`${STAGE_LABEL[laneId]} ad`} className="w-full rounded-lg" />
             <button
               onClick={() => {
                 const link = document.createElement("a");
-                link.href = dataUrl;
+                link.href = imageUrl;
                 link.download = `ad-${laneId}.png`;
+                link.target = "_blank";
                 link.click();
               }}
               className="absolute top-3 right-3 bg-black/60 hover:bg-black/80 text-white text-xs px-3 py-1.5 rounded-lg backdrop-blur-sm transition-colors"

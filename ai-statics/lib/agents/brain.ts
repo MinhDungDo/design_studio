@@ -1,7 +1,8 @@
 import { generateObject } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
-import { AwarenessStage, STAGE_LABEL, STAGE_BRIEF } from "./awareness";
+import { AwarenessStage, AWARENESS_STAGES, STAGE_LABEL, STAGE_BRIEF } from "./awareness";
+import { timingLog } from "./timingLog";
 
 // One base64 image plus its mime type.
 export interface ImageInput {
@@ -20,7 +21,7 @@ export interface BrainInputs {
 const ASPECT_RATIOS = ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3"] as const;
 
 const finalDirectionSchema = z.object({
-  concept: z.string().describe("Short concept name"),
+  stage: z.enum(AWARENESS_STAGES).describe("The awareness stage this direction is for"),
   headline: z.string().describe("On-image headline, 3-7 words"),
   subline: z.string().optional().describe("Optional on-image subline, <=6 words"),
   finalImagePrompt: z
@@ -31,20 +32,22 @@ const finalDirectionSchema = z.object({
   negativePrompt: z.string().describe("What to avoid in the image"),
   aspectRatio: z.enum(ASPECT_RATIOS).describe("One of gpt_image_2's supported ratios"),
   caption: z.string().describe("Primary text / caption, 125-500 chars"),
-  metaHeadline: z.string().describe("Meta headline field, 25-40 chars"),
-  metaDescription: z.string().describe("Meta description, <30 chars"),
-  cta: z.string().describe("Call to action"),
 });
 
 export type FinalDirection = z.infer<typeof finalDirectionSchema>;
 
-const OUTPUT_INSTRUCTION = `You are operating as the Static Ad Creative Agent defined above. For the inputs and the ONE target awareness stage below, run your four phases internally and return ONLY the final result as the structured fields. The finalImagePrompt must be production-ready for gpt-image-2, bake the headline into the image with verbatim-text constraints, preserve the product shown in the PRODUCT image(s) exactly, and borrow only composition/mood/lighting/layout (never branding) from any BENCHMARK image. aspectRatio must be one of: ${ASPECT_RATIOS.join(", ")}.`;
+const batchDirectionSchema = z.object({
+  directions: z.array(finalDirectionSchema),
+});
 
-function userText(inputs: BrainInputs, stage: AwarenessStage): string {
+const OUTPUT_INSTRUCTION = `You are operating as the Static Ad Creative Agent defined above. For EACH requested awareness stage below, run your four phases internally and return ONLY one final result object per stage. Each finalImagePrompt must be production-ready for gpt-image-2, bake the headline into the image with verbatim-text constraints, preserve the product shown in the PRODUCT image(s) exactly, and borrow only composition/mood/lighting/layout (never branding) from any BENCHMARK image. aspectRatio must be one of: ${ASPECT_RATIOS.join(", ")}.`;
+
+function userText(inputs: BrainInputs, stages: AwarenessStage[]): string {
   const lines = [
     OUTPUT_INSTRUCTION,
     "",
-    `TARGET AWARENESS STAGE — ${STAGE_LABEL[stage]}: ${STAGE_BRIEF[stage]}`,
+    "TARGET AWARENESS STAGES:",
+    ...stages.map((stage) => `- ${stage} — ${STAGE_LABEL[stage]}: ${STAGE_BRIEF[stage]}`),
     "",
     `PRODUCT BRIEF: ${inputs.productBrief.trim()}`,
   ];
@@ -55,20 +58,28 @@ function userText(inputs: BrainInputs, stage: AwarenessStage): string {
 }
 
 // The "Supercomputer" brain: Claude runs content/BRIEF.md (system prompt) over the
-// inputs + reference images and returns one Final Direction for the given stage.
-export async function runBrain(args: {
+// inputs + reference images and returns Final Directions for the requested stages.
+export async function runBrainBatch(args: {
   brief: string;
   inputs: BrainInputs;
-  stage: AwarenessStage;
+  stages: AwarenessStage[];
   productImages: ImageInput[];
   benchmarkImages: ImageInput[];
-}): Promise<FinalDirection> {
+}): Promise<Record<AwarenessStage, FinalDirection>> {
+  const startedAt = Date.now();
+  timingLog("brain", "batch:start", {
+    stages: args.stages,
+    productImages: args.productImages.length,
+    benchmarkImages: args.benchmarkImages.length,
+    briefChars: args.brief.length,
+    productBriefChars: args.inputs.productBrief.length,
+  });
   const model = anthropic(process.env.CLAUDE_MODEL ?? "claude-sonnet-4-6");
 
   type Part =
     | { type: "text"; text: string }
     | { type: "image"; image: string; mediaType: string };
-  const content: Part[] = [{ type: "text", text: userText(args.inputs, args.stage) }];
+  const content: Part[] = [{ type: "text", text: userText(args.inputs, args.stages) }];
 
   for (const img of args.productImages) {
     content.push({ type: "text", text: "PRODUCT IMAGE — preserve this product exactly (shape, colors, labels, branding):" });
@@ -81,13 +92,44 @@ export async function runBrain(args: {
 
   const { object } = await generateObject({
     model,
-    schema: finalDirectionSchema,
-    // The Final Direction is small (~800 tokens). Cap output so we don't reserve
+    schema: batchDirectionSchema,
+    // Each Final Direction is small (~800 tokens). Cap output so we don't reserve
     // the model's 128k max against Anthropic's per-minute limit — with several
     // lanes firing at once that reservation triggers 429s + silent retries.
-    maxOutputTokens: 4000,
+    maxOutputTokens: Math.min(12000, 2500 * args.stages.length),
     system: args.brief,
     messages: [{ role: "user", content }],
   });
-  return object;
+  timingLog("brain", "batch:done", {
+    elapsedMs: Date.now() - startedAt,
+    directions: object.directions.length,
+  });
+
+  const byStage = Object.fromEntries(
+    object.directions.map((direction) => [direction.stage, direction])
+  ) as Partial<Record<AwarenessStage, FinalDirection>>;
+
+  const missing = args.stages.filter((stage) => !byStage[stage]);
+  if (missing.length > 0) {
+    throw new Error(`Claude did not return directions for: ${missing.join(", ")}`);
+  }
+
+  return byStage as Record<AwarenessStage, FinalDirection>;
+}
+
+export async function runBrain(args: {
+  brief: string;
+  inputs: BrainInputs;
+  stage: AwarenessStage;
+  productImages: ImageInput[];
+  benchmarkImages: ImageInput[];
+}): Promise<FinalDirection> {
+  const directions = await runBrainBatch({
+    brief: args.brief,
+    inputs: args.inputs,
+    stages: [args.stage],
+    productImages: args.productImages,
+    benchmarkImages: args.benchmarkImages,
+  });
+  return directions[args.stage];
 }

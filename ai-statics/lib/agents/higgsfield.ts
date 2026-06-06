@@ -4,6 +4,7 @@ import { writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { timingLog, timingWarn } from "./timingLog";
 
 const execFileAsync = promisify(execFile);
 
@@ -39,13 +40,20 @@ export async function uploadImageFromUrl(url: string): Promise<string> {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
+        const startedAt = Date.now();
+        timingLog("higgsfield", "upload:start", { attempt, bytes: buf.byteLength, mime });
         const out = await higgsfield(["upload", "create", tmpPath, "--json"], 90 * 1000);
         const parsed = JSON.parse(out);
         const id = parsed.id ?? parsed.uuid ?? parsed.media_id;
         if (!id) throw new Error(`No media id from 'upload create'. Raw: ${out.slice(0, 300)}`);
+        timingLog("higgsfield", "upload:done", { attempt, elapsedMs: Date.now() - startedAt });
         return id as string;
       } catch (err) {
         lastErr = err;
+        timingWarn("higgsfield", "upload:retry", {
+          attempt,
+          message: err instanceof Error ? err.message : "Unknown upload error",
+        });
         if (attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
       }
     }
@@ -53,12 +61,6 @@ export async function uploadImageFromUrl(url: string): Promise<string> {
   } finally {
     await unlink(tmpPath).catch(() => {});
   }
-}
-
-async function downloadToBase64(url: string): Promise<string> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to download result image: ${res.status}`);
-  return Buffer.from(await res.arrayBuffer()).toString("base64");
 }
 
 export interface RenderInput {
@@ -72,10 +74,18 @@ export interface RenderInput {
 
 // Render one ad with GPT Image 2. The brain wrote the full prompt (incl. in-image
 // headline); gpt_image_2 has no negative-prompt field, so we fold it into the text.
-export async function renderGptImage2(input: RenderInput): Promise<{ imageBase64: string; imageUrl: string }> {
+export async function renderGptImage2(input: RenderInput): Promise<{ imageUrl: string }> {
+  const startedAt = Date.now();
   const prompt = input.negativePrompt?.trim()
     ? `${input.prompt}\n\nDo NOT include: ${input.negativePrompt.trim()}`
     : input.prompt;
+  timingLog("higgsfield", "render:start", {
+    aspectRatio: input.aspectRatio,
+    quality: input.quality ?? "high",
+    resolution: input.resolution ?? "2k",
+    mediaIds: input.mediaIds.length,
+    promptChars: prompt.length,
+  });
 
   const cli = [
     "generate", "create", "gpt_image_2",
@@ -94,5 +104,6 @@ export async function renderGptImage2(input: RenderInput): Promise<{ imageBase64
   const resultUrl: string | undefined =
     job?.result_url ?? job?.url ?? job?.results?.[0]?.url ?? job?.images?.[0]?.url;
   if (!resultUrl) throw new Error(`No result URL from gpt_image_2 job. Raw: ${out.slice(0, 500)}`);
-  return { imageBase64: await downloadToBase64(resultUrl), imageUrl: resultUrl };
+  timingLog("higgsfield", "render:done", { elapsedMs: Date.now() - startedAt });
+  return { imageUrl: resultUrl };
 }

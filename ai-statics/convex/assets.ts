@@ -34,11 +34,42 @@ export const listAssets = query({
   },
 });
 
+export const getAssetsByIds = query({
+  args: { assetIds: v.array(v.id("brandAssets")) },
+  handler: async (ctx, args) => {
+    const assets = await Promise.all(args.assetIds.map((id) => ctx.db.get(id)));
+    return Promise.all(
+      assets
+        .filter((a) => a !== null)
+        .map(async (a) => ({
+          _id: a._id,
+          name: a.name,
+          kind: a.kind,
+          higgsfieldMediaId: a.higgsfieldMediaId,
+          url: await ctx.storage.getUrl(a.storageId),
+        }))
+    );
+  },
+});
+
 // Cache the Higgsfield media id after first upload (optional optimization).
 export const setHiggsfieldId = mutation({
   args: { assetId: v.id("brandAssets"), higgsfieldMediaId: v.string() },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.assetId, { higgsfieldMediaId: args.higgsfieldMediaId });
+  },
+});
+
+// Swap an asset's stored file for a new one (e.g. a downscaled version), keeping
+// the row + cached higgsfieldMediaId. Deletes the old file.
+export const replaceStorage = mutation({
+  args: { assetId: v.id("brandAssets"), storageId: v.id("_storage") },
+  handler: async (ctx, args) => {
+    const a = await ctx.db.get(args.assetId);
+    if (!a) return;
+    const oldStorageId = a.storageId;
+    await ctx.db.patch(args.assetId, { storageId: args.storageId });
+    if (oldStorageId !== args.storageId) await ctx.storage.delete(oldStorageId);
   },
 });
 

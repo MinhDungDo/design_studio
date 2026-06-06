@@ -202,6 +202,23 @@ Prefer hands, partial faces, over-the-shoulder, natural body language — avoids
 | **POV / interaction** | 35mm, user eye-level, product in use, hands visible, bg blurred, documentary | mechanism, demonstration, interaction |
 | **Flatlay / gift** | top-down, 50mm, f/5.6, warm light, organized comp, subtle props, clean space | bundles, gifts, seasonal |
 
+### Capture authenticity — the anti-perfect dial (default ON)
+Polished = ignored. An ad that looks *made* reads as an ad and gets scrolled past; one that looks *captured* reads as real and stops the scroll. **Never instruct imperfection directly** ("add grain," "make it rough/imperfect") — the model fakes it or ignores it. Instead **describe the capture conditions that cause it** and let the roughness fall out as a byproduct:
+- **Device & author** — frame it as a real person's phone, not a shoot: *"shot on an older smartphone by the customer," "candid phone snapshot," "everyday camera-roll photo."* This alone brings natural framing, sensor compression, and mild motion blur.
+- **Available light** — *"late-afternoon window light with hard shadows," "ordinary overhead kitchen light," "mixed indoor lighting."* Drop "soft even studio light," "golden hour," and any "quality modifiers."
+- **Lived-in setting** — a real, slightly busy environment: a used mug, crumbs, a worn cushion, a readable-but-not-styled surface. Specific mundane props beat a seamless backdrop.
+- **Loose camera** — slightly off-center or tilted, handheld, imperfect focus, a touch over- or under-exposed. Don't ask for "clean composition" or "shallow DoF" in UGC modes.
+- Authenticity, **not chaos**: the product must stay recognizable and the headline legible.
+
+**Grade the dial by awareness stage** (the colder the traffic, the more native it should feel):
+| Stage | Capture mode |
+|---|---|
+| Unaware / Problem-Aware | **Full UGC** — phone snapshot, ambient light, real lived-in setting, zero studio cues. Should look native to the feed, not like an ad. |
+| Solution-Aware | **Elevated UGC** — still handheld, available-light and real, but framed a little more deliberately. |
+| Product-Aware / Most-Aware | **Clean but real** — product and offer must read clearly, so allow better light and framing, but keep one honest handheld/lived-in quality so it never tips into glossy. |
+
+This dial **modulates the brand camera file**, it doesn't ignore it: keep the brand's world, color, and mood, but for Full/Elevated UGC stages **override the polished brand-camera cues** (pro body, shallow DoF, golden hour, "editorial") with their phone-capture equivalents. Brand look governs *what* the world feels like; the dial governs *how it was captured*.
+
 ### Format, aspect ratio & safe zones
 Pick the ratio from the placement, then keep the headline inside the safe zone:
 | Placement | Ratio | Safe zone for text |
@@ -218,15 +235,17 @@ GPT Image 2 renders text well, so write the headline into the prompt:
 - Keep total visible words ≤ 10–12 (Phase 2 limits). Reserve a clean low-detail area so the text stays legible; never put key product detail under it.
 
 ### Negative prompt — always include
-`no distorted hands, no extra fingers, no uncanny faces, no cluttered/messy background, no cold studio lighting, no aggressive colors, no corporate stock photo look, no unrealistic plastic texture, no fake UI, no irrelevant props, no exaggerated CGI, no misspelled text, no duplicate text, no watermark, no logo unless provided`
-Add brand-specific negatives when available.
+Keep the rendering-defect bans, and **push away from the AI-perfect "tells"** (this is the other half of the anti-perfect dial):
+`no distorted hands, no extra fingers, no uncanny faces, no misspelled text, no duplicate text, no watermark, no logo unless provided, no fake UI, no exaggerated CGI, no 3D render look, no glossy advertising render, no hyperreal sheen, no immaculate studio lighting, no perfectly even retouched skin, no flawless symmetrical staging, no over-saturated catalog colors, no stock-photo polish, no plastic-looking surfaces`
+Do **not** ban "messy background" or "imperfect lighting" — for UGC stages those *are* the point. Add brand-specific negatives when available.
 
 ### Reference image handling
 Classify each: product / lifestyle / composition / camera-angle / lighting / color-mood / benchmark ad / competitor ad / existing-image-to-improve. For each, state **borrow / avoid / effect on prompt**. Product references are passed to GPT Image 2 Edit so the real product (logo, font, packaging text) is preserved exactly.
 > *Reference 1 (Lifestyle): Borrow — warm sofa setting, parent-child closeness, top-left negative space. Avoid — cold grading, unreadable product, messy bg. Use — adapt to brand camera style.*
 
 ### GPT Image 2 prompt formula (production brief)
-`[medium/style] of [subject] in [specific setting], [aspect ratio]. Showing [mechanism/action], [composition + clean text-safe area]. [camera body/lens/aperture/angle], [lighting], [mood/emotion], [brand color palette], [quality modifiers]. The product matches the provided reference exactly. Render the headline "[exact copy]" at [position] [+ subline "[copy]"] in [type feel]; render text verbatim, correct spelling, no extra words, no duplicate text.`
+`[capture context — for UGC stages: "candid smartphone photo shot by the customer"; for clean stages: the brand camera style] of [subject] in [specific, lived-in setting], [aspect ratio]. Showing [mechanism/action], [framing + a clean text-safe area]. [camera/lens/angle — or "handheld phone, slightly off-center"], [available/ambient lighting], [mood/emotion], [color palette]. The product matches the provided reference exactly. Render the headline "[exact copy]" at [position] [+ subline "[copy]"] in [type feel]; render text verbatim, correct spelling, no extra words, no duplicate text.`
+Note the order: capture context leads, and there are no "quality/4K/hyperreal" modifiers — those are what produce the over-polished look.
 
 ### Phase 3 output
 ```
@@ -290,6 +309,7 @@ Headline field · Description · CTA
 - [ ] Reference image used correctly
 - [ ] No unsupported claims; provenance respected
 - [ ] Meta-safe (situations, not accusations)
+- [ ] Reads as *captured*, not *made* — no glossy-ad tells; capture mode matches the awareness stage
 - [ ] Could **not** fit 10 unrelated brands
 
 **Quality bar:** a human reading the final prompt must understand what the product is, why the scene matters, what the buyer should feel, where the headline goes, and how the image supports the angle.
@@ -320,8 +340,9 @@ A full run through all four phases. Use it as the output standard.
 **Phase 3 — Image Brief (gpt-image-2)**
 - Aspect ratio **4:5** (IG feed). Safe zone: top ~25% kept clean for the headline.
 - Product reference: pass the real BAOKS book; preserve actual cover art, illustration style, and on-page text — do not invent a fake book.
-- **Prompt:** *Over-the-shoulder documentary lifestyle photo, 4:5 aspect ratio. A ~5-year-old child on a cozy sofa in a warm German family living room at dusk, pointing at one of two illustrated story choices on the open left-hand page of an interactive children's book; parent's hands hold the book, parent softly out of focus beside the child. Full-frame camera, 35mm prime at f/2.8, child eye-level, warm evening lamp light, shallow depth of field, soft neutral colours, magical-but-grounded mood. The book matches the provided reference exactly. Keep a clean low-detail wall area across the top quarter. Render the German headline "Diesmal entscheidet dein Kind." across the top, smaller subline "Welcher Weg wird's heute?" beneath, in a warm cream rounded sans-serif. Render text verbatim, correct German spelling, no extra words, no duplicate text.*
-- **Negative prompt:** *no distorted hands, no extra fingers, no uncanny faces, no cluttered/messy room, no cold studio lighting, no corporate stock look, no plastic toy look, no tablet, no phone, no screen, no fantasy CGI, no unreadable book text, no misspelled text, no duplicate text, no watermark.*
+- **Capture mode:** Problem-Aware → **Full UGC** (phone snapshot, ambient light, real lived-in room). Keep BAOKS's warm cozy *world*; change only *how it was captured*.
+- **Prompt:** *Candid smartphone photo shot by the parent, 4:5 aspect ratio, slightly off-center and handheld. A ~5-year-old child on a lived-in family-room sofa one evening, pointing at one of two illustrated story choices on the open left-hand page of an interactive children's book; parent's hands hold the book at the edge of frame. Ordinary warm living-room light from a nearby lamp, mild shadows, a blanket bunched on the sofa and a mug on the side table in the background. The book matches the provided reference exactly. Keep a clean low-detail wall area across the top quarter. Render the German headline "Diesmal entscheidet dein Kind." across the top, smaller subline "Welcher Weg wird's heute?" beneath, in a warm cream rounded sans-serif. Render text verbatim, correct German spelling, no extra words, no duplicate text.*
+- **Negative prompt:** *no distorted hands, no extra fingers, no uncanny faces, no glossy advertising render, no immaculate studio lighting, no perfectly even retouched skin, no stock-photo polish, no exaggerated CGI, no 3D render look, no plastic toy look, no tablet, no phone, no screen, no unreadable book text, no misspelled text, no duplicate text, no watermark.*
 
 **Phase 4 — Final Direction:** the above merged. QA: one emotion ✓ one angle ✓ one objection ✓ mechanism visible ✓ headline 4 words rendered in-image ✓ product reference preserved ✓ Meta-safe ("Kennst du das?" is a situation, not an accusation) ✓ couldn't fit 10 brands ✓
 
@@ -369,7 +390,9 @@ Replace this whole appendix to use the agent for another brand.
 
 ## Appendix B — BAOKS Camera & Art Direction (swappable example)
 
-**Visual principle:** *A real child discovered a secret world inside an ordinary home.* Warm, cozy, magical-but-grounded, premium-not-sterile, child-height, soft natural light, real German family home.
+**Visual principle:** *A real child discovered a secret world inside an ordinary home.* Warm, cozy, magical-but-grounded, premium-not-sterile, child-height, real German family home.
+
+**Capture mode (see Phase 3 authenticity dial):** the look below is the **clean-stage** treatment (product-/most-aware). For cold traffic (unaware/problem-aware), keep this warmth and world but capture it as a **candid parent phone photo** — ambient living-room light, handheld and slightly off-center, a lived-in room — not a pro-camera editorial shoot. The shots below describe framing/world; for UGC stages swap the pro body + shallow DoF + golden-hour cues for phone-capture equivalents.
 
 **Camera body look:** full-frame (Sony A7 IV / Canon R5 / Nikon Z6 II / Leica SL2; Fujifilm GFX for premium editorial).
 
