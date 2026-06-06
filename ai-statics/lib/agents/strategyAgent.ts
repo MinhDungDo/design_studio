@@ -1,5 +1,5 @@
 import { generateText } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { qwen } from "./qwen";
 
 export interface StrategyInput {
   productBrief?: string;
@@ -19,7 +19,7 @@ export interface StrategyOutput {
 
 export async function runStrategyAgent(input: StrategyInput): Promise<StrategyOutput> {
   const { text } = await generateText({
-    model: openai("gpt-4o"),
+    model: qwen,
     system: `You are a world-class direct response creative strategist.
 Your job is to analyze product briefs and customer data to define the BEST angle for a static ad.
 You think in terms of: awareness stages (unaware → problem aware → solution aware → product aware → most aware),

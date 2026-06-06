@@ -1,5 +1,5 @@
 import { generateText } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { qwen } from "./qwen";
 import { StrategyOutput } from "./strategyAgent";
 import { CopyOutput } from "./copyAgent";
 
@@ -19,7 +19,7 @@ export interface ImagePromptOutput {
 
 export async function runImagePromptAgent(input: ImagePromptInput): Promise<ImagePromptOutput> {
   const { text } = await generateText({
-    model: openai("gpt-4o"),
+    model: qwen,
     system: `You are a world-class art director and AI image prompt engineer.
 You write detailed, specific instructions for GPT Image 2's image-EDITING endpoint. It receives the brand's actual product photo as a reference image alongside your prompt and edits it into a finished static ad — it does not generate the product from scratch.
 Every prompt you write MUST start by instructing the model to keep the product from the reference photo intact: same shape, proportions, colors, labels, and branding, even if shown from a different angle, distance, or in a different setting. Only the scene around it — background, setting, lighting, props, composition — should be reimagined.

@@ -1,5 +1,5 @@
 import { generateText } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { qwen } from "./qwen";
 import { StrategyOutput } from "./strategyAgent";
 
 export interface CopyInput {
@@ -18,7 +18,7 @@ export interface CopyOutput {
 
 export async function runCopyAgent(input: CopyInput): Promise<CopyOutput> {
   const { text } = await generateText({
-    model: openai("gpt-4o"),
+    model: qwen,
     system: `You are a world-class direct response copywriter.
 You write punchy, benefit-driven copy that converts. You understand:
 - Pattern interrupts and scroll-stopping headlines

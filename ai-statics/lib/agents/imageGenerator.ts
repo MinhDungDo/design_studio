@@ -1,12 +1,9 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execa } from "execa";
 import { writeFile, unlink, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ImagePromptOutput } from "./imagePromptAgent";
-
-const execFileAsync = promisify(execFile);
 
 export interface ProductImageInput {
   data: string; // base64-encoded image bytes (no "data:" URL prefix)
@@ -31,8 +28,19 @@ const SIZE_TO_ASPECT_RATIO: Record<string, string> = {
   "1024x1536": "2:3",
 };
 
+// gpt_image_2 only accepts low/medium/high; imagePromptAgent reasons about
+// quality as standard/high (matching the README's cost-tier guidance).
+const QUALITY_TO_HIGGSFIELD: Record<string, string> = {
+  standard: "medium",
+  high: "high",
+};
+
 async function higgsfield(...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("higgsfield", args, {
+  // execa (not node:child_process directly) because the npm-installed CLI is a
+  // .cmd shim on Windows — execFile can't spawn it without shell:true, and
+  // shell:true would pass these args (which include LLM-generated prompt text)
+  // through cmd.exe unescaped, opening up command injection.
+  const { stdout } = await execa("higgsfield", args, {
     timeout: 10 * 60 * 1000, // 10 minutes
   });
   return stdout.trim();
@@ -44,7 +52,7 @@ async function uploadProductImage(productImage: ProductImageInput): Promise<stri
 
   await writeFile(tmpPath, Buffer.from(productImage.data, "base64"));
   try {
-    const output = await higgsfield("upload", tmpPath, "--json");
+    const output = await higgsfield("upload", "create", tmpPath, "--json");
     const parsed = JSON.parse(output);
     return parsed.id ?? parsed.uuid;
   } finally {
@@ -67,6 +75,7 @@ export async function runImageGenerator(
   const imageId = await uploadProductImage(productImage);
 
   const aspectRatio = SIZE_TO_ASPECT_RATIO[promptData.size] ?? "1:1";
+  const quality = QUALITY_TO_HIGGSFIELD[promptData.quality] ?? "medium";
 
   // Generate the ad image via Higgsfield CLI using GPT Image 2.
   // --wait blocks until the job completes and returns the result URL.
@@ -75,15 +84,21 @@ export async function runImageGenerator(
     "--prompt", promptData.prompt,
     "--image", imageId,
     "--aspect_ratio", aspectRatio,
-    "--quality", promptData.quality,
+    "--quality", quality,
     "--wait",
     "--json"
   );
 
-  const result = JSON.parse(output);
-  const resultUrl: string | undefined = result.result_url ?? result.url;
+  // `generate create --wait --json` always wraps results in an array, even
+  // for a single job (it supports batched job sets).
+  const [job] = JSON.parse(output);
+  const resultUrl: string | undefined = job?.result_url || job?.url;
 
-  if (!resultUrl) throw new Error("No result URL returned from Higgsfield GPT Image 2 job");
+  if (!resultUrl) {
+    throw new Error(
+      `Higgsfield GPT Image 2 job ended with status "${job?.status}" and no result URL`
+    );
+  }
 
   // Download the generated image and convert to base64 for the UI.
   const imageBase64 = await downloadToBase64(resultUrl);

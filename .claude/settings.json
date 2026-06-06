@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Read(//c/Users/minhd/AppData/Roaming/npm/**)",
+      "Read(//c/Users/minhd/AppData/Roaming/npm/node_modules/**)",
+      "Bash(where node *)",
+      "Bash(npm view *)",
+      "Bash(npm root *)",
+      "Bash(npm install *)",
+      "Bash(npm audit *)",
+      "Bash(higgsfield upload *)",
+      "Bash(higgsfield generate *)",
+      "Bash(higgsfield model *)",
+      "Bash(node -e ' *)"
+    ]
+  }
+}

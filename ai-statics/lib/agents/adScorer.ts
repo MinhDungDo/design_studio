@@ -1,5 +1,5 @@
 import { generateText } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { qwen } from "./qwen";
 import { StrategyOutput } from "./strategyAgent";
 import { CopyOutput } from "./copyAgent";
 
@@ -25,7 +25,7 @@ export interface AdScorerOutput {
 
 export async function runAdScorer(input: AdScorerInput): Promise<AdScorerOutput> {
   const { text } = await generateText({
-    model: openai("gpt-4o"),
+    model: qwen,
     system: `You are a senior direct response creative director and ad performance expert.
 You score static ads against proven DR principles. Be honest and critical.
 A passing score (65+) means the ad is ready to test. Below 65 means it needs work.
