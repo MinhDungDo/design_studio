@@ -1,0 +1,8 @@
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
+# Convex local dev cache
+.convex/
+
+# misc
+.DS_Store
