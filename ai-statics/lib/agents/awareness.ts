@@ -1,7 +1,7 @@
 // The fan-out dimension: one persona, many ads — one per awareness stage
 // (Eugene Schwartz). Same product/person; the message, angle, and scene shift
-// as the buyer becomes more aware. Shared by the strategy agent (to steer each
-// lane) and the UI (labels + stage picker).
+// as the buyer becomes more aware. Shared by the brain (to steer each lane via
+// STAGE_BRIEF) and the UI (labels + stage picker).
 
 export const AWARENESS_STAGES = [
   "unaware",
@@ -21,8 +21,8 @@ export const STAGE_LABEL: Record<AwarenessStage, string> = {
   "most-aware": "Most-Aware",
 };
 
-// One-line creative brief injected into the strategy prompt so each lane's
-// angle/hook/scene is crafted specifically for that stage of awareness.
+// One-line creative brief handed to the brain so each lane's angle/hook/scene
+// is crafted specifically for that stage of awareness.
 export const STAGE_BRIEF: Record<AwarenessStage, string> = {
   unaware:
     "The buyer doesn't know they have the problem. Lead with a relatable moment or curiosity hook — no product talk, no jargon. Goal: stop the scroll and create recognition.",

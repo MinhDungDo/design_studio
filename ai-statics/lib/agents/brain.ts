@@ -20,7 +20,6 @@ export interface BrainInputs {
 const ASPECT_RATIOS = ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3"] as const;
 
 const finalDirectionSchema = z.object({
-  concept: z.string().describe("Short concept name"),
   headline: z.string().describe("On-image headline, 3-7 words"),
   subline: z.string().optional().describe("Optional on-image subline, <=6 words"),
   finalImagePrompt: z
@@ -31,9 +30,6 @@ const finalDirectionSchema = z.object({
   negativePrompt: z.string().describe("What to avoid in the image"),
   aspectRatio: z.enum(ASPECT_RATIOS).describe("One of gpt_image_2's supported ratios"),
   caption: z.string().describe("Primary text / caption, 125-500 chars"),
-  metaHeadline: z.string().describe("Meta headline field, 25-40 chars"),
-  metaDescription: z.string().describe("Meta description, <30 chars"),
-  cta: z.string().describe("Call to action"),
 });
 
 export type FinalDirection = z.infer<typeof finalDirectionSchema>;

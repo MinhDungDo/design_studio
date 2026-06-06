@@ -34,7 +34,7 @@ export type ProgressStep =
   | { step: "swarmStart"; lanes: AwarenessStage[] }
   | { step: "laneStart"; laneId: AwarenessStage }
   | { step: "brain"; status: "running" | "done"; laneId: AwarenessStage }
-  | { step: "imageGen"; status: "running" | "done"; laneId: AwarenessStage; imageBase64?: string }
+  | { step: "imageGen"; status: "running" | "done"; laneId: AwarenessStage }
   | { step: "laneComplete"; laneId: AwarenessStage; result: AdResult }
   | { step: "swarmComplete" }
   | { step: "error"; laneId?: AwarenessStage; message: string };
@@ -75,7 +75,7 @@ async function runLane(
     quality: (process.env.RENDER_QUALITY as "low" | "medium" | "high") || "medium",
     resolution: (process.env.RENDER_RESOLUTION as "1k" | "2k" | "4k") || "1k",
   });
-  emit({ step: "imageGen", status: "done", laneId: stage, imageBase64 });
+  emit({ step: "imageGen", status: "done", laneId: stage });
 
   return {
     laneId: stage,
