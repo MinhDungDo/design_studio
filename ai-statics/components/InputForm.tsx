@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
 import {
   AwarenessStage,
   AWARENESS_STAGES,
@@ -11,25 +12,21 @@ import {
 } from "@/lib/agents/awareness";
 
 export interface GenerateFormData {
-  offer: string;
-  productDetails?: string;
-  formatId: string;
-  storeUrl?: string;
-  assetUrls: string[];
+  productBrief: string;
+  brandKit?: string;
+  customerReviews?: string;
+  referenceAds?: string;
+  productAssetIds: string[];
+  benchmarkAssetIds: string[];
   stages: AwarenessStage[];
 }
 
-interface AdFormatOption {
-  id: string;
-  name: string;
-}
+type AssetKind = "product" | "reference_ad";
 
-// Shape returned by convex `assets.listAssets` (api is AnyApi, so we type it here).
 interface BrandAsset {
-  _id: string;
+  _id: Id<"brandAssets">;
   name: string;
-  kind: "product" | "brand";
-  higgsfieldMediaId?: string;
+  kind: AssetKind;
   url: string | null;
 }
 
@@ -49,24 +46,12 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
   const deleteAsset = useMutation(api.assets.deleteAsset);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [offer, setOffer] = useState("");
-  const [productDetails, setProductDetails] = useState("");
-  const [storeUrl, setStoreUrl] = useState("");
-  const [formats, setFormats] = useState<AdFormatOption[]>([]);
-  const [formatId, setFormatId] = useState("");
+  const [productBrief, setProductBrief] = useState("");
+  const [brandKit, setBrandKit] = useState("");
+  const [customerReviews, setCustomerReviews] = useState("");
+  const [referenceAds, setReferenceAds] = useState("");
   const [stages, setStages] = useState<AwarenessStage[]>(DEFAULT_STAGES);
-  const [uploading, setUploading] = useState(false);
-
-  // Load the DTC ad-format catalog for the picker.
-  useEffect(() => {
-    fetch("/api/formats")
-      .then((r) => r.json())
-      .then((d: { formats?: AdFormatOption[] }) => {
-        setFormats(d.formats ?? []);
-        if (d.formats?.[0]) setFormatId((cur) => cur || d.formats![0].id);
-      })
-      .catch(() => {});
-  }, []);
+  const [uploading, setUploading] = useState<AssetKind | null>(null);
 
   const toggleStage = (stage: AwarenessStage) =>
     setStages((prev) => (prev.includes(stage) ? prev.filter((s) => s !== stage) : [...prev, stage]));
@@ -78,147 +63,184 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
       return next;
     });
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>, kind: AssetKind) => {
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    if (!file) return;
-    setUploading(true);
+    if (files.length === 0) return;
+    setUploading(kind);
     try {
-      const postUrl = await generateUploadUrl();
-      const res = await fetch(postUrl, {
-        method: "POST",
-        headers: { "Content-Type": file.type },
-        body: file,
-      });
-      const { storageId } = await res.json();
-      await saveAsset({ storageId, name: file.name, kind: "product" });
+      // Upload all selected files in parallel; each gets its own upload URL + row.
+      await Promise.all(
+        files.map(async (file) => {
+          const postUrl = await generateUploadUrl();
+          const res = await fetch(postUrl, {
+            method: "POST",
+            headers: { "Content-Type": file.type },
+            body: file,
+          });
+          const { storageId } = await res.json();
+          await saveAsset({ storageId, name: file.name, kind });
+        })
+      );
     } finally {
-      setUploading(false);
+      setUploading(null);
     }
   };
 
-  const selectedUrls = assets
-    .filter((a) => selectedIds.has(a._id as string) && a.url)
-    .map((a) => a.url as string);
+  const idsForKind = (kind: AssetKind) =>
+    assets.filter((a) => a.kind === kind && selectedIds.has(a._id as string)).map((a) => a._id as string);
+
+  const productAssetIds = idsForKind("product");
+  const benchmarkAssetIds = idsForKind("reference_ad");
 
   const canSubmit =
-    !isGenerating && offer.trim().length > 0 && formatId && stages.length > 0 && selectedUrls.length > 0;
+    !isGenerating && productBrief.trim().length > 0 && stages.length > 0 && productAssetIds.length > 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
     onSubmit({
-      offer: offer.trim(),
-      productDetails: productDetails.trim() || undefined,
-      formatId,
-      storeUrl: storeUrl.trim() || undefined,
-      assetUrls: selectedUrls,
+      productBrief: productBrief.trim(),
+      brandKit: brandKit.trim() || undefined,
+      customerReviews: customerReviews.trim() || undefined,
+      referenceAds: referenceAds.trim() || undefined,
+      productAssetIds,
+      benchmarkAssetIds,
       stages,
     });
   };
 
+  const ImageGroup = ({ kind, hint }: { kind: AssetKind; hint: string }) => {
+    const items = assets.filter((a) => a.kind === kind);
+    return (
+      <div className="grid grid-cols-3 gap-2">
+        {items.map((a) => {
+          const id = a._id as string;
+          const active = selectedIds.has(id);
+          return (
+            <div key={id} className="relative group">
+              <button
+                type="button"
+                onClick={() => toggleAsset(id)}
+                disabled={isGenerating}
+                className={`block w-full aspect-square rounded-lg overflow-hidden border-2 transition-all ${
+                  active ? "border-[#ff4d00]" : "border-white/10 hover:border-white/30"
+                }`}
+              >
+                {a.url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={a.url} alt={a.name} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full bg-white/5" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteAsset({ assetId: a._id })}
+                disabled={isGenerating}
+                className="absolute top-1 right-1 bg-black/70 hover:bg-black/90 text-white text-[10px] w-5 h-5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Remove from library"
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+        <label className="flex flex-col items-center justify-center aspect-square border border-dashed border-white/15 rounded-lg cursor-pointer hover:border-[#ff4d00]/50 hover:bg-white/5 transition-all text-center px-2">
+          <span className="text-white/50 text-xs">{uploading === kind ? "Uploading…" : "+ Upload"}</span>
+          <span className="text-white/25 text-[10px] mt-0.5">{hint}</span>
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            className="hidden"
+            onChange={(e) => handleUpload(e, kind)}
+            disabled={isGenerating || uploading !== null}
+          />
+        </label>
+      </div>
+    );
+  };
+
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {/* Brand asset library (Convex-backed) */}
+      {/* Product images */}
       <div>
         <label className={labelClass}>
-          Reference Images *{" "}
-          <span className="text-white/25 normal-case tracking-normal">{selectedIds.size} selected</span>
+          Product Images *{" "}
+          <span className="text-white/25 normal-case tracking-normal">{productAssetIds.length} selected — kept intact</span>
         </label>
-        <div className="grid grid-cols-3 gap-2">
-          {assets.map((a) => {
-            const id = a._id as string;
-            const active = selectedIds.has(id);
-            return (
-              <div key={id} className="relative group">
-                <button
-                  type="button"
-                  onClick={() => toggleAsset(id)}
-                  disabled={isGenerating}
-                  className={`block w-full aspect-square rounded-lg overflow-hidden border-2 transition-all ${
-                    active ? "border-[#ff4d00]" : "border-white/10 hover:border-white/30"
-                  }`}
-                >
-                  {a.url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={a.url} alt={a.name} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full bg-white/5" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => deleteAsset({ assetId: a._id })}
-                  disabled={isGenerating}
-                  className="absolute top-1 right-1 bg-black/70 hover:bg-black/90 text-white text-[10px] w-5 h-5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Remove from library"
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
+        <ImageGroup kind="product" hint="the product" />
+      </div>
 
-          <label className="flex flex-col items-center justify-center aspect-square border border-dashed border-white/15 rounded-lg cursor-pointer hover:border-[#ff4d00]/50 hover:bg-white/5 transition-all text-center px-2">
-            <span className="text-white/50 text-xs">{uploading ? "Uploading…" : "+ Upload"}</span>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="hidden"
-              onChange={handleUpload}
-              disabled={isGenerating || uploading}
-            />
-          </label>
-        </div>
+      {/* Example / benchmark ads */}
+      <div>
+        <label className={labelClass}>
+          Example Ads{" "}
+          <span className="text-white/25 normal-case tracking-normal">{benchmarkAssetIds.length} selected — style direction</span>
+        </label>
+        <ImageGroup kind="reference_ad" hint="good ad refs" />
         <p className="text-white/25 text-xs mt-1">
-          Your brand/product image library. Selected images are used as references — the product stays intact in every ad.
+          Optional. The brain borrows composition/mood/lighting from these — never their branding.
         </p>
       </div>
 
-      {/* Offer */}
+      {/* Product Brief */}
       <div>
-        <label className={labelClass}>Offer *</label>
+        <label className={labelClass}>Product Brief *</label>
         <textarea
           className={inputClass}
-          rows={2}
-          placeholder="What are you advertising? e.g. 20% off the summer skincare bundle"
-          value={offer}
-          onChange={(e) => setOffer(e.target.value)}
+          rows={4}
+          placeholder="What is the product? Key features, what it is, what problem it solves, the mechanism that makes it different…"
+          value={productBrief}
+          onChange={(e) => setProductBrief(e.target.value)}
           disabled={isGenerating}
         />
       </div>
 
-      {/* Product details (per-run specifics) */}
+      {/* Brand Kit */}
       <div>
         <label className={labelClass}>
-          Product Details <span className="text-white/25 normal-case tracking-normal">optional</span>
+          Brand Kit <span className="text-white/25 normal-case tracking-normal">optional</span>
         </label>
         <textarea
           className={inputClass}
           rows={3}
-          placeholder="Specifics for THIS product: key features, price, materials, ingredients, claims, what makes it different. (Brand voice & ICP come from the shared brief.)"
-          value={productDetails}
-          onChange={(e) => setProductDetails(e.target.value)}
+          placeholder="Brand voice/tone, colors, values, what to avoid…"
+          value={brandKit}
+          onChange={(e) => setBrandKit(e.target.value)}
           disabled={isGenerating}
         />
       </div>
 
-      {/* Ad format */}
+      {/* Customer Reviews & Feedback */}
       <div>
-        <label className={labelClass}>Ad Format</label>
-        <select
+        <label className={labelClass}>
+          Customer Reviews & Feedback <span className="text-white/25 normal-case tracking-normal">optional</span>
+        </label>
+        <textarea
           className={inputClass}
-          value={formatId}
-          onChange={(e) => setFormatId(e.target.value)}
-          disabled={isGenerating || formats.length === 0}
-        >
-          {formats.length === 0 && <option value="">Loading formats…</option>}
-          {formats.map((f) => (
-            <option key={f.id} value={f.id} className="bg-[#0a0a0a]">
-              {f.name}
-            </option>
-          ))}
-        </select>
+          rows={3}
+          placeholder="Paste real reviews, survey responses, or feedback — used as voice-of-customer (never invented)."
+          value={customerReviews}
+          onChange={(e) => setCustomerReviews(e.target.value)}
+          disabled={isGenerating}
+        />
+      </div>
+
+      {/* Reference Ads (text) */}
+      <div>
+        <label className={labelClass}>
+          Reference Ads <span className="text-white/25 normal-case tracking-normal">optional text direction</span>
+        </label>
+        <textarea
+          className={inputClass}
+          rows={2}
+          placeholder="Describe reference ads / competitors to draw composition & mood from (complements the example-ad images)."
+          value={referenceAds}
+          onChange={(e) => setReferenceAds(e.target.value)}
+          disabled={isGenerating}
+        />
       </div>
 
       {/* Awareness stages */}
@@ -247,21 +269,6 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
             );
           })}
         </div>
-      </div>
-
-      {/* Optional store URL → brand kit */}
-      <div>
-        <label className={labelClass}>
-          Store URL <span className="text-white/25 normal-case tracking-normal">optional — auto-builds a brand kit</span>
-        </label>
-        <input
-          type="url"
-          className={inputClass}
-          placeholder="https://yourstore.com"
-          value={storeUrl}
-          onChange={(e) => setStoreUrl(e.target.value)}
-          disabled={isGenerating}
-        />
       </div>
 
       <button

@@ -12,7 +12,7 @@ export const saveAsset = mutation({
   args: {
     storageId: v.id("_storage"),
     name: v.string(),
-    kind: v.union(v.literal("product"), v.literal("brand")),
+    kind: v.union(v.literal("product"), v.literal("reference_ad")),
   },
   handler: async (ctx, args) => await ctx.db.insert("brandAssets", args),
 });
