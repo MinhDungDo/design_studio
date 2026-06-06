@@ -1,28 +1,40 @@
 "use client";
 
 import { useState } from "react";
-import InputForm, { ProductImage } from "@/components/InputForm";
+import InputForm, { GenerateFormData } from "@/components/InputForm";
 import GenerationProgress from "@/components/GenerationProgress";
-import AdResult from "@/components/AdResult";
-import { ProgressStep, GenerationResult } from "@/lib/agents/orchestrator";
+import AdResultCard from "@/components/AdResult";
+import { ProgressStep, AdResult } from "@/lib/agents/orchestrator";
+import { AwarenessStage, STAGE_LABEL } from "@/lib/agents/awareness";
 
 export default function Home() {
-  const [steps, setSteps] = useState<ProgressStep[]>([]);
-  const [result, setResult] = useState<GenerationResult | null>(null);
+  const [lanes, setLanes] = useState<AwarenessStage[]>([]);
+  const [stepsByLane, setStepsByLane] = useState<Record<string, ProgressStep[]>>({});
+  const [resultsByLane, setResultsByLane] = useState<Record<string, AdResult>>({});
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleGenerate = async (formData: {
-    productBrief?: string;
-    brandKit?: string;
-    customerReviews?: string;
-    referenceAds?: string;
-    productImage: ProductImage;
-  }) => {
+  const handleGenerate = async (formData: GenerateFormData) => {
     setIsGenerating(true);
-    setSteps([]);
-    setResult(null);
+    setLanes(formData.stages);
+    setStepsByLane(Object.fromEntries(formData.stages.map((s) => [s, []])));
+    setResultsByLane({});
     setError(null);
+
+    // Append-or-replace a step within its lane (keyed by step name).
+    const upsertLaneStep = (laneId: AwarenessStage, progress: ProgressStep) => {
+      setStepsByLane((prev) => {
+        const laneSteps = prev[laneId] ?? [];
+        const idx = laneSteps.findIndex(
+          (s) => "step" in s && "step" in progress && s.step === progress.step
+        );
+        const next =
+          idx >= 0
+            ? laneSteps.map((s, i) => (i === idx ? progress : s))
+            : [...laneSteps, progress];
+        return { ...prev, [laneId]: next };
+      });
+    };
 
     try {
       const res = await fetch("/api/generate", {
@@ -30,40 +42,38 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
       });
-
       if (!res.body) throw new Error("No response body");
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? ""; // keep partial line for next chunk
 
-        const lines = decoder.decode(value).split("\n").filter(Boolean);
-        for (const line of lines) {
+        for (const line of lines.filter(Boolean)) {
+          let progress: ProgressStep;
           try {
-            const progress = JSON.parse(line) as ProgressStep;
-            setSteps((prev) => {
-              const existing = prev.findIndex(
-                (s) => "step" in s && s.step === progress.step
-              );
-              if (existing >= 0) {
-                const updated = [...prev];
-                updated[existing] = progress;
-                return updated;
-              }
-              return [...prev, progress];
-            });
-
-            if (progress.step === "complete") {
-              setResult(progress.result);
-            }
-            if (progress.step === "error") {
-              setError(progress.message);
-            }
+            progress = JSON.parse(line) as ProgressStep;
           } catch {
-            // skip malformed lines
+            continue;
+          }
+
+          if (progress.step === "swarmStart") {
+            setLanes(progress.lanes);
+          } else if (progress.step === "swarmComplete") {
+            // terminal — handled by finally
+          } else if (progress.step === "laneComplete") {
+            setResultsByLane((prev) => ({ ...prev, [progress.laneId]: progress.result }));
+          } else if (progress.step === "error") {
+            if (progress.laneId) upsertLaneStep(progress.laneId, progress);
+            else setError(progress.message);
+          } else if ("laneId" in progress) {
+            upsertLaneStep(progress.laneId, progress);
           }
         }
       }
@@ -73,6 +83,8 @@ export default function Home() {
       setIsGenerating(false);
     }
   };
+
+  const hasRun = lanes.length > 0;
 
   return (
     <main className="min-h-screen bg-[#0a0a0a] text-white">
@@ -90,28 +102,49 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-8 py-12 grid grid-cols-1 lg:grid-cols-2 gap-12">
+      <div className="max-w-[1600px] mx-auto px-8 py-12 grid grid-cols-1 lg:grid-cols-[minmax(360px,420px)_1fr] gap-12">
         <div>
           <div className="mb-8">
-            <h1 className="text-4xl font-bold tracking-tight mb-2">Generate Static Ads</h1>
-            <p className="text-white/50">AI-powered direct response ad generation. Fill in the details and let the agents do the work.</p>
+            <h1 className="text-4xl font-bold tracking-tight mb-2">Awareness-Stage Ads</h1>
+            <p className="text-white/50">
+              One persona, one product — a swarm of ads, one per awareness stage. Watch them generate in parallel.
+            </p>
           </div>
           <InputForm onSubmit={handleGenerate} isGenerating={isGenerating} />
         </div>
 
         <div>
-          {steps.length > 0 && (
-            <GenerationProgress steps={steps} isGenerating={isGenerating} />
-          )}
-          {result && <AdResult result={result} />}
           {error && (
-            <div className="mt-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+            <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
               <p className="text-red-400 text-sm font-mono">{error}</p>
             </div>
           )}
-          {steps.length === 0 && !error && (
+
+          {!hasRun && !error && (
             <div className="h-full flex items-center justify-center text-white/20 text-sm pt-32">
-              Your generated ad will appear here
+              Your stage-by-stage ad swarm will appear here
+            </div>
+          )}
+
+          {hasRun && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+              {lanes.map((lane) => {
+                const result = resultsByLane[lane];
+                return (
+                  <div key={lane}>
+                    {result ? (
+                      <AdResultCard result={result} />
+                    ) : (
+                      <div className="border border-white/10 rounded-xl p-4">
+                        <GenerationProgress
+                          steps={stepsByLane[lane] ?? []}
+                          title={STAGE_LABEL[lane]}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

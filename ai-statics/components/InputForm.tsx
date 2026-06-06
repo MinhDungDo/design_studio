@@ -1,154 +1,281 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import {
+  AwarenessStage,
+  AWARENESS_STAGES,
+  STAGE_LABEL,
+  DEFAULT_STAGES,
+} from "@/lib/agents/awareness";
 
-export interface ProductImage {
-  data: string; // base64-encoded image bytes (no "data:" URL prefix)
-  mimeType: string; // e.g. "image/png", "image/jpeg", "image/webp"
+export interface GenerateFormData {
+  offer: string;
+  productDetails?: string;
+  formatId: string;
+  storeUrl?: string;
+  assetUrls: string[];
+  stages: AwarenessStage[];
+}
+
+interface AdFormatOption {
+  id: string;
+  name: string;
+}
+
+// Shape returned by convex `assets.listAssets` (api is AnyApi, so we type it here).
+interface BrandAsset {
+  _id: string;
+  name: string;
+  kind: "product" | "brand";
+  higgsfieldMediaId?: string;
+  url: string | null;
 }
 
 interface Props {
-  onSubmit: (data: {
-    productBrief?: string;
-    brandKit?: string;
-    customerReviews?: string;
-    referenceAds?: string;
-    productImage: ProductImage;
-  }) => void;
+  onSubmit: (data: GenerateFormData) => void;
   isGenerating: boolean;
 }
 
+const inputClass =
+  "w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder-white/25 focus:outline-none focus:border-[#ff4d00]/60 focus:bg-white/8 transition-all resize-none";
+const labelClass = "block text-xs font-medium text-white/50 uppercase tracking-widest mb-2";
+
 export default function InputForm({ onSubmit, isGenerating }: Props) {
-  const [productBrief, setProductBrief] = useState("");
-  const [brandKit, setBrandKit] = useState("");
-  const [customerReviews, setCustomerReviews] = useState("");
-  const [referenceAds, setReferenceAds] = useState("");
-  const [productImage, setProductImage] = useState<ProductImage | null>(null);
+  const assets = (useQuery(api.assets.listAssets) ?? []) as BrandAsset[];
+  const generateUploadUrl = useMutation(api.assets.generateUploadUrl);
+  const saveAsset = useMutation(api.assets.saveAsset);
+  const deleteAsset = useMutation(api.assets.deleteAsset);
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [offer, setOffer] = useState("");
+  const [productDetails, setProductDetails] = useState("");
+  const [storeUrl, setStoreUrl] = useState("");
+  const [formats, setFormats] = useState<AdFormatOption[]>([]);
+  const [formatId, setFormatId] = useState("");
+  const [stages, setStages] = useState<AwarenessStage[]>(DEFAULT_STAGES);
+  const [uploading, setUploading] = useState(false);
+
+  // Load the DTC ad-format catalog for the picker.
+  useEffect(() => {
+    fetch("/api/formats")
+      .then((r) => r.json())
+      .then((d: { formats?: AdFormatOption[] }) => {
+        setFormats(d.formats ?? []);
+        if (d.formats?.[0]) setFormatId((cur) => cur || d.formats![0].id);
+      })
+      .catch(() => {});
+  }, []);
+
+  const toggleStage = (stage: AwarenessStage) =>
+    setStages((prev) => (prev.includes(stage) ? prev.filter((s) => s !== stage) : [...prev, stage]));
+
+  const toggleAsset = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    e.target.value = ""; // allow re-selecting the same file after removing it
+    e.target.value = "";
     if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const match = /^data:(.+);base64,(.*)$/.exec(reader.result as string);
-      if (match) setProductImage({ mimeType: match[1], data: match[2] });
-    };
-    reader.readAsDataURL(file);
+    setUploading(true);
+    try {
+      const postUrl = await generateUploadUrl();
+      const res = await fetch(postUrl, {
+        method: "POST",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      const { storageId } = await res.json();
+      await saveAsset({ storageId, name: file.name, kind: "product" });
+    } finally {
+      setUploading(false);
+    }
   };
+
+  const selectedUrls = assets
+    .filter((a) => selectedIds.has(a._id as string) && a.url)
+    .map((a) => a.url as string);
+
+  const canSubmit =
+    !isGenerating && offer.trim().length > 0 && formatId && stages.length > 0 && selectedUrls.length > 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!productImage) return;
+    if (!canSubmit) return;
     onSubmit({
-      productBrief: productBrief || undefined,
-      brandKit: brandKit || undefined,
-      customerReviews: customerReviews || undefined,
-      referenceAds: referenceAds || undefined,
-      productImage,
+      offer: offer.trim(),
+      productDetails: productDetails.trim() || undefined,
+      formatId,
+      storeUrl: storeUrl.trim() || undefined,
+      assetUrls: selectedUrls,
+      stages,
     });
   };
 
-  const inputClass =
-    "w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder-white/25 focus:outline-none focus:border-[#ff4d00]/60 focus:bg-white/8 transition-all resize-none";
-  const labelClass = "block text-xs font-medium text-white/50 uppercase tracking-widest mb-2";
-
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
+      {/* Brand asset library (Convex-backed) */}
       <div>
-        <label className={labelClass}>Product Image *</label>
-        {productImage ? (
-          <div className="relative">
-            <img
-              src={`data:${productImage.mimeType};base64,${productImage.data}`}
-              alt="Product preview"
-              className="w-full h-48 object-contain bg-white/5 border border-white/10 rounded-lg"
-            />
-            <button
-              type="button"
-              onClick={() => setProductImage(null)}
-              disabled={isGenerating}
-              className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white text-xs px-3 py-1.5 rounded-lg backdrop-blur-sm transition-colors"
-            >
-              Remove
-            </button>
-          </div>
-        ) : (
-          <label className="flex flex-col items-center justify-center h-32 border border-dashed border-white/15 rounded-lg cursor-pointer hover:border-[#ff4d00]/50 hover:bg-white/5 transition-all text-center px-4">
-            <span className="text-white/50 text-sm">Click to upload a product photo</span>
-            <span className="text-white/25 text-xs mt-1">PNG, JPG, or WEBP — the real product, kept intact in the generated ad</span>
+        <label className={labelClass}>
+          Reference Images *{" "}
+          <span className="text-white/25 normal-case tracking-normal">{selectedIds.size} selected</span>
+        </label>
+        <div className="grid grid-cols-3 gap-2">
+          {assets.map((a) => {
+            const id = a._id as string;
+            const active = selectedIds.has(id);
+            return (
+              <div key={id} className="relative group">
+                <button
+                  type="button"
+                  onClick={() => toggleAsset(id)}
+                  disabled={isGenerating}
+                  className={`block w-full aspect-square rounded-lg overflow-hidden border-2 transition-all ${
+                    active ? "border-[#ff4d00]" : "border-white/10 hover:border-white/30"
+                  }`}
+                >
+                  {a.url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={a.url} alt={a.name} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full bg-white/5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteAsset({ assetId: a._id })}
+                  disabled={isGenerating}
+                  className="absolute top-1 right-1 bg-black/70 hover:bg-black/90 text-white text-[10px] w-5 h-5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Remove from library"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+
+          <label className="flex flex-col items-center justify-center aspect-square border border-dashed border-white/15 rounded-lg cursor-pointer hover:border-[#ff4d00]/50 hover:bg-white/5 transition-all text-center px-2">
+            <span className="text-white/50 text-xs">{uploading ? "Uploading…" : "+ Upload"}</span>
             <input
               type="file"
               accept="image/png,image/jpeg,image/webp"
               className="hidden"
-              onChange={handleImageChange}
-              disabled={isGenerating}
+              onChange={handleUpload}
+              disabled={isGenerating || uploading}
             />
           </label>
-        )}
+        </div>
+        <p className="text-white/25 text-xs mt-1">
+          Your brand/product image library. Selected images are used as references — the product stays intact in every ad.
+        </p>
       </div>
 
+      {/* Offer */}
       <div>
-        <label className={labelClass}>Product Brief <span className="text-white/25 normal-case tracking-normal">optional</span></label>
-        <textarea
-          className={inputClass}
-          rows={4}
-          placeholder="What is the product? Key features, price point, USP, what problem it solves... (leave blank to let the AI infer from the photo)"
-          value={productBrief}
-          onChange={(e) => setProductBrief(e.target.value)}
-          disabled={isGenerating}
-        />
-      </div>
-
-      <div>
-        <label className={labelClass}>Brand Kit <span className="text-white/25 normal-case tracking-normal">optional</span></label>
-        <textarea
-          className={inputClass}
-          rows={3}
-          placeholder="Brand voice, colors, fonts, tone of voice, what to avoid, brand values..."
-          value={brandKit}
-          onChange={(e) => setBrandKit(e.target.value)}
-          disabled={isGenerating}
-        />
-      </div>
-
-      <div>
-        <label className={labelClass}>Customer Reviews & Feedback <span className="text-white/25 normal-case tracking-normal">optional</span></label>
-        <textarea
-          className={inputClass}
-          rows={4}
-          placeholder="Paste real customer reviews, survey responses, or feedback. The more the better..."
-          value={customerReviews}
-          onChange={(e) => setCustomerReviews(e.target.value)}
-          disabled={isGenerating}
-        />
-      </div>
-
-      <div>
-        <label className={labelClass}>Reference Ads <span className="text-white/25 normal-case tracking-normal">optional</span></label>
+        <label className={labelClass}>Offer *</label>
         <textarea
           className={inputClass}
           rows={2}
-          placeholder="Describe reference ads or competitors you want to draw inspiration from..."
-          value={referenceAds}
-          onChange={(e) => setReferenceAds(e.target.value)}
+          placeholder="What are you advertising? e.g. 20% off the summer skincare bundle"
+          value={offer}
+          onChange={(e) => setOffer(e.target.value)}
+          disabled={isGenerating}
+        />
+      </div>
+
+      {/* Product details (per-run specifics) */}
+      <div>
+        <label className={labelClass}>
+          Product Details <span className="text-white/25 normal-case tracking-normal">optional</span>
+        </label>
+        <textarea
+          className={inputClass}
+          rows={3}
+          placeholder="Specifics for THIS product: key features, price, materials, ingredients, claims, what makes it different. (Brand voice & ICP come from the shared brief.)"
+          value={productDetails}
+          onChange={(e) => setProductDetails(e.target.value)}
+          disabled={isGenerating}
+        />
+      </div>
+
+      {/* Ad format */}
+      <div>
+        <label className={labelClass}>Ad Format</label>
+        <select
+          className={inputClass}
+          value={formatId}
+          onChange={(e) => setFormatId(e.target.value)}
+          disabled={isGenerating || formats.length === 0}
+        >
+          {formats.length === 0 && <option value="">Loading formats…</option>}
+          {formats.map((f) => (
+            <option key={f.id} value={f.id} className="bg-[#0a0a0a]">
+              {f.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Awareness stages */}
+      <div>
+        <label className={labelClass}>
+          Awareness Stages{" "}
+          <span className="text-white/25 normal-case tracking-normal">{stages.length} selected — one ad each</span>
+        </label>
+        <div className="flex flex-wrap gap-2">
+          {AWARENESS_STAGES.map((stage) => {
+            const active = stages.includes(stage);
+            return (
+              <button
+                key={stage}
+                type="button"
+                onClick={() => toggleStage(stage)}
+                disabled={isGenerating}
+                className={`text-xs px-3 py-2 rounded-lg border transition-all ${
+                  active
+                    ? "border-[#ff4d00]/60 bg-[#ff4d00]/10 text-white"
+                    : "border-white/10 bg-white/5 text-white/40 hover:text-white/70"
+                }`}
+              >
+                {STAGE_LABEL[stage]}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Optional store URL → brand kit */}
+      <div>
+        <label className={labelClass}>
+          Store URL <span className="text-white/25 normal-case tracking-normal">optional — auto-builds a brand kit</span>
+        </label>
+        <input
+          type="url"
+          className={inputClass}
+          placeholder="https://yourstore.com"
+          value={storeUrl}
+          onChange={(e) => setStoreUrl(e.target.value)}
           disabled={isGenerating}
         />
       </div>
 
       <button
         type="submit"
-        disabled={isGenerating || !productImage}
+        disabled={!canSubmit}
         className="w-full bg-[#ff4d00] hover:bg-[#e64500] disabled:bg-white/10 disabled:text-white/25 text-white font-semibold py-4 rounded-lg transition-all duration-200 text-sm tracking-wide"
       >
         {isGenerating ? (
           <span className="flex items-center justify-center gap-2">
             <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            Generating...
+            Generating {stages.length} ads…
           </span>
         ) : (
-          "Generate Ad →"
+          `Generate ${stages.length} Ad${stages.length === 1 ? "" : "s"} →`
         )}
       </button>
     </form>

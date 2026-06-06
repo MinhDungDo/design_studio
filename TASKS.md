@@ -1,45 +1,51 @@
-# AdSwarm — Hackathon Task Board (3-hour MVP, then refine)
+# AdSwarm — Hackathon Task Board
 
-Multi-agent Meta ad generator. **Next.js → Vercel AI SDK → OpenAI GPT → Convex**,
-GPT Image for the photo, Satori/`@vercel/og` for text + Meta chrome.
+AI static-ad generator. **One persona → many ads, one per awareness stage.**
+Same product, same buyer; the angle, copy, and scene shift as the buyer gets more
+aware (Schwartz: unaware → problem-aware → solution-aware → product-aware → most-aware).
 
 **Team:** Kevin (Backend/Pipeline) · Minh (Agents + Frontend craft) · Ale (Product Owner)
 
-## ⏱️ The plan: ship an MVP in 3 hours, then make it great
-- **MVP scope (by 3:00):** setup → drop brand → watch the swarm → **3 distinct,
-  on-brand ads on screen**, generated live.
-- **Refine (3:00+):** replay/offline cache, PNG download, per-ad regenerate,
-  👍/👎, benchmark/style packs, demo polish.
+## 🧱 Actual stack (as built, in `ai-statics/`)
+- **Next.js 16** App Router. Generation runs in a **Next API route**
+  (`app/api/generate/route.ts`) that **streams NDJSON** progress — not Convex.
+- **Text agents → Qwen** (`qwen-max` via DashScope OpenAI-compatible endpoint,
+  `lib/agents/model.ts` → `brain`). Needs `DASHSCOPE_API_KEY`. (No OpenAI.)
+- **Image → Higgsfield CLI** `gpt_image_2` (`lib/agents/imageGenerator.ts`), the
+  **product photo passed as a reference** so the real product stays intact. Needs
+  the `higgsfield` CLI installed + authenticated on the server machine.
+- **Convex:** scaffolded but **deferred** (orphaned; not wired). Replay can be a
+  static fixture later. `lab/` (Kevin's Convex-reactive prototype) is **superseded
+  reference only**.
 
 ## 🥇 The one rule
-**By IC2 (1:30), have ONE genuinely beautiful, real-looking Meta ad end-to-end
-from Ale's real brand assets.** If it looks like slop, stop and fix the look
-before building the swarm. QC is **human feedback (Ale + team)** for v1 — no
-Critic agent.
+**Have ONE genuinely beautiful, real-looking ad end-to-end from a real product
+photo.** If it looks like slop, fix the look before scaling the swarm. QC =
+human feedback for v1 (an `adScorer` agent also scores each ad).
 
 ---
 
-## Pipeline (per persona)
+## Pipeline (per awareness stage — N run in parallel)
 ```
-Orchestrator (Kevin, control flow — fans out across 3 personas)
-  └─ Strategy Generator (Minh) ──┬─► Copy Generator (Minh)        → headline/primary/cta
-                                 └─► Image Prompt Generator (Minh) → imagePrompt
-                                        └─► GPT Image (Kevin) → photo → store
-        └─► RENDER (Minh's <MetaAd>): photo + copy + Meta chrome → the ad
+runSwarm(input, stages)  — fans out across the selected awareness stages
+  └─ for each stage → runLane:
+       Strategy (Qwen, stage-targeted) ──┬─► Copy (Qwen)         → headline/sub/body/cta
+                                         └─► Image Prompt (Qwen) → editing prompt
+                                                └─► Higgsfield gpt_image_2 (product photo = reference) → ad image
+       └─► adScorer (Qwen) → 0-100 + feedback
+  every step emits a laneId-tagged ProgressStep → merged into one NDJSON stream
+  → UI renders one progress column per stage, then a grid of finished ads
 ```
 
-## 🔒 The contract — freeze at IC1 (0:30)
-```ts
-// Minh — pure functions, NO Convex imports (testable solo against the seed kit):
-runStrategyGenerator({ brandKit, psychologyNotes, segment, proofAssets }): Promise<Strategy>
-runCopyGenerator({ strategy, brandKit, segment, proofAssets }): Promise<{ headline, primary, cta }>
-runImagePromptGenerator({ strategy, brandKit }): Promise<{ imagePrompt: string }>
-
-// Kevin — orchestrator that sequences them + image + storage + events:
-generateRun(brandKit, segments, { emitEvent, storeImage }): Promise<void>
-```
-Minh tests agents with a `console.log` emitEvent. Kevin builds the pipeline with **stubbed
-agents** (return fake Strategy/copy) until Minh's land, then swaps the import.
+## ✅ Implemented on `kevin/pipeline`
+- `lib/agents/awareness.ts` — stages, labels, per-stage creative briefs, defaults.
+- `strategyAgent` — driven by `targetAwarenessStage` + `persona`.
+- `orchestrator` — `runLane` + `runSwarm` (parallel fan-out, concurrency-capped
+  via `SWARM_CONCURRENCY`, merged stream, `laneComplete`/`swarmComplete` events).
+- `route.ts` — calls `runSwarm`, sanitizes requested stages, `maxDuration=300`.
+- UI — `InputForm` (persona + stage picker), `page.tsx` (per-lane state + swarm
+  grid), `GenerationProgress` (one column per stage), `AdResult` (stage label).
+- Typecheck + lint clean (0 errors).
 
 ---
 
