@@ -35,9 +35,114 @@ interface Props {
   isGenerating: boolean;
 }
 
+interface ImageGroupProps {
+  kind: AssetKind;
+  hint: string;
+  assets: BrandAsset[];
+  selectedIds: Set<string>;
+  isGenerating: boolean;
+  uploading: AssetKind | null;
+  onToggleAsset: (id: string) => void;
+  onDeleteAsset: (assetId: Id<"brandAssets">) => void;
+  onUpload: (e: React.ChangeEvent<HTMLInputElement>, kind: AssetKind) => void;
+}
+
 const inputClass =
   "w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder-white/25 focus:outline-none focus:border-[#ff4d00]/60 focus:bg-white/8 transition-all resize-none";
 const labelClass = "block text-xs font-medium text-white/50 uppercase tracking-widest mb-2";
+
+// Shrink images BEFORE they hit Convex. Print-res masters (15-25 MB) are pointless
+// here — neither Claude nor gpt_image_2's reference needs more than ~2000px, and
+// Convex storage egress is slow (~0.2-0.8 MB/s), so a full master takes 1-2 min to
+// re-download on every run. Resizing here means the library only ever holds ~300 KB
+// files. Falls back to the original file if the browser can't decode it.
+const MAX_EDGE = 2000;
+async function downscaleForUpload(file: File): Promise<{ body: Blob; name: string; type: string }> {
+  const passthrough = { body: file, name: file.name, type: file.type };
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return passthrough;
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) return passthrough;
+  try {
+    const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    const w = Math.round(bitmap.width * scale);
+    const h = Math.round(bitmap.height * scale);
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return passthrough;
+    ctx.fillStyle = "#ffffff"; // white matte so transparent PNGs don't flatten to black as JPEG
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.85));
+    if (!blob) return passthrough;
+    return { body: blob, name: file.name.replace(/\.[^.]+$/, "") + ".jpg", type: "image/jpeg" };
+  } finally {
+    bitmap.close();
+  }
+}
+
+function ImageGroup({
+  kind,
+  hint,
+  assets,
+  selectedIds,
+  isGenerating,
+  uploading,
+  onToggleAsset,
+  onDeleteAsset,
+  onUpload,
+}: ImageGroupProps) {
+  const items = assets.filter((a) => a.kind === kind);
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {items.map((a) => {
+        const id = a._id as string;
+        const active = selectedIds.has(id);
+        return (
+          <div key={id} className="relative group">
+            <button
+              type="button"
+              onClick={() => onToggleAsset(id)}
+              disabled={isGenerating}
+              className={`block w-full aspect-square rounded-lg overflow-hidden border-2 transition-all ${
+                active ? "border-[#ff4d00]" : "border-white/10 hover:border-white/30"
+              }`}
+            >
+              {a.url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={a.url} alt={a.name} className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full bg-white/5" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => onDeleteAsset(a._id)}
+              disabled={isGenerating}
+              className="absolute top-1 right-1 bg-black/70 hover:bg-black/90 text-white text-[10px] w-5 h-5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Remove from library"
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
+      <label className="flex flex-col items-center justify-center aspect-square border border-dashed border-white/15 rounded-lg cursor-pointer hover:border-[#ff4d00]/50 hover:bg-white/5 transition-all text-center px-2">
+        <span className="text-white/50 text-xs">{uploading === kind ? "Uploading…" : "+ Upload"}</span>
+        <span className="text-white/25 text-[10px] mt-0.5">{hint}</span>
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          multiple
+          className="hidden"
+          onChange={(e) => onUpload(e, kind)}
+          disabled={isGenerating || uploading !== null}
+        />
+      </label>
+    </div>
+  );
+}
 
 export default function InputForm({ onSubmit, isGenerating }: Props) {
   const assets = (useQuery(api.assets.listAssets) ?? []) as BrandAsset[];
@@ -59,7 +164,8 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
   const toggleAsset = (id: string) =>
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
@@ -69,17 +175,19 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
     if (files.length === 0) return;
     setUploading(kind);
     try {
-      // Upload all selected files in parallel; each gets its own upload URL + row.
+      // Upload all selected files in parallel; each is downscaled first, then gets
+      // its own upload URL + row.
       await Promise.all(
         files.map(async (file) => {
+          const { body, name, type } = await downscaleForUpload(file);
           const postUrl = await generateUploadUrl();
           const res = await fetch(postUrl, {
             method: "POST",
-            headers: { "Content-Type": file.type },
-            body: file,
+            headers: { "Content-Type": type },
+            body,
           });
           const { storageId } = await res.json();
-          await saveAsset({ storageId, name: file.name, kind });
+          await saveAsset({ storageId, name, kind });
         })
       );
     } finally {
@@ -110,58 +218,6 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
     });
   };
 
-  const ImageGroup = ({ kind, hint }: { kind: AssetKind; hint: string }) => {
-    const items = assets.filter((a) => a.kind === kind);
-    return (
-      <div className="grid grid-cols-3 gap-2">
-        {items.map((a) => {
-          const id = a._id as string;
-          const active = selectedIds.has(id);
-          return (
-            <div key={id} className="relative group">
-              <button
-                type="button"
-                onClick={() => toggleAsset(id)}
-                disabled={isGenerating}
-                className={`block w-full aspect-square rounded-lg overflow-hidden border-2 transition-all ${
-                  active ? "border-[#ff4d00]" : "border-white/10 hover:border-white/30"
-                }`}
-              >
-                {a.url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={a.url} alt={a.name} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full bg-white/5" />
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => deleteAsset({ assetId: a._id })}
-                disabled={isGenerating}
-                className="absolute top-1 right-1 bg-black/70 hover:bg-black/90 text-white text-[10px] w-5 h-5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                title="Remove from library"
-              >
-                ×
-              </button>
-            </div>
-          );
-        })}
-        <label className="flex flex-col items-center justify-center aspect-square border border-dashed border-white/15 rounded-lg cursor-pointer hover:border-[#ff4d00]/50 hover:bg-white/5 transition-all text-center px-2">
-          <span className="text-white/50 text-xs">{uploading === kind ? "Uploading…" : "+ Upload"}</span>
-          <span className="text-white/25 text-[10px] mt-0.5">{hint}</span>
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            multiple
-            className="hidden"
-            onChange={(e) => handleUpload(e, kind)}
-            disabled={isGenerating || uploading !== null}
-          />
-        </label>
-      </div>
-    );
-  };
-
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       {/* Product images */}
@@ -170,7 +226,17 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
           Product Images *{" "}
           <span className="text-white/25 normal-case tracking-normal">{productAssetIds.length} selected — kept intact</span>
         </label>
-        <ImageGroup kind="product" hint="the product" />
+        <ImageGroup
+          kind="product"
+          hint="the product"
+          assets={assets}
+          selectedIds={selectedIds}
+          isGenerating={isGenerating}
+          uploading={uploading}
+          onToggleAsset={toggleAsset}
+          onDeleteAsset={(assetId) => deleteAsset({ assetId })}
+          onUpload={handleUpload}
+        />
       </div>
 
       {/* Example / benchmark ads */}
@@ -179,7 +245,17 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
           Example Ads{" "}
           <span className="text-white/25 normal-case tracking-normal">{benchmarkAssetIds.length} selected — style direction</span>
         </label>
-        <ImageGroup kind="reference_ad" hint="good ad refs" />
+        <ImageGroup
+          kind="reference_ad"
+          hint="good ad refs"
+          assets={assets}
+          selectedIds={selectedIds}
+          isGenerating={isGenerating}
+          uploading={uploading}
+          onToggleAsset={toggleAsset}
+          onDeleteAsset={(assetId) => deleteAsset({ assetId })}
+          onUpload={handleUpload}
+        />
         <p className="text-white/25 text-xs mt-1">
           Optional. The brain borrows composition/mood/lighting from these — never their branding.
         </p>
