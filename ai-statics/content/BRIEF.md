@@ -22,7 +22,7 @@ Every ad in a run targets THIS one person at a different awareness stage.
 
 ## Visual direction
 - **Keep intact:** the product shown in the reference image — same shape, colors, labels, branding. Only reimagine the scene around it.
-- **Look & feel:** <photographic style, lighting, palette, mood>
+- **Look & feel:** Bright, warm, and lived-in — soft natural daylight, golden warm tones, airy rather than stark. Rotate the setting across generations rather than repeating the same room — draw from a cozy kid's bedroom, a sunlit kitchen, and a warm corner of a neighborhood bookstore, so that across a batch no two variations land in the same space. Style each with everyday life scattered around: toys, crayon drawings taped to the wall, a plate with cookie crumbs, mugs. Books should feel like part of the room itself — lying open or stacked unevenly on a windowsill, table, or floor exactly where someone set them down mid-use, not arranged for the camera. Give every shot one small "wow" moment that makes you look twice — a shaft of sunlight cutting through, an unexpected pop of color, a charming little detail tucked in a corner. The whole scene should read as a candid moment caught in passing, never a staged photoshoot.
 - **Always:** leave clean space for headline/CTA text overlays.
 - **Avoid:** <clutter, off-brand colors, distorting the product, fake-looking composites>
 

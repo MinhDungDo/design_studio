@@ -1,11 +1,8 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execa } from "execa";
 import { writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-
-const execFileAsync = promisify(execFile);
 
 // One DTC ad format preset (a "lane style"). From `ad-formats list`.
 export interface AdFormat {
@@ -23,9 +20,21 @@ async function higgsfield(...args: string[]): Promise<string> {
   console.log(`[higgsfield] → ${label}`);
   const started = Date.now();
   try {
-    const { stdout } = await execFileAsync("higgsfield", args, {
+    // execa (not node:child_process directly): the npm-installed CLI is a `.cmd`
+    // shim on Windows — execFile can't spawn it without shell:true, and shell:true
+    // would pass these args (which include LLM-authored prompt text) through
+    // cmd.exe unescaped, opening up command injection. execa resolves the shim
+    // and safely escapes args without shell interpretation.
+    //
+    // Spawning a `.cmd` shim still forces Windows to relay the argv through
+    // `cmd.exe /c`, and cmd.exe's line-based parsing truncates any quoted
+    // argument at its first embedded newline — silently dropping every flag
+    // that follows (observed as a phantom "Flag --format-id is required",
+    // because the multi-line prompt's line breaks ate the rest of the argv).
+    // No argument here is meant to carry real newlines, so flatten them first.
+    const safeArgs = args.map((a) => a.replace(/\r\n|\r|\n/g, " "));
+    const { stdout } = await execa("higgsfield", safeArgs, {
       timeout: 10 * 60 * 1000, // 10 min — generation jobs run with --wait
-      maxBuffer: 64 * 1024 * 1024,
     });
     console.log(`[higgsfield] ✓ ${label} (${Date.now() - started}ms)`);
     return stdout.trim();
@@ -95,6 +104,11 @@ async function downloadToBase64(url: string): Promise<string> {
   return Buffer.from(await res.arrayBuffer()).toString("base64");
 }
 
+export interface DtcAdImage {
+  imageBase64: string;
+  imageUrl: string;
+}
+
 export interface DtcAdInput {
   prompt: string;
   formatId: string;
@@ -103,11 +117,16 @@ export interface DtcAdInput {
   aspectRatio?: string;
   quality?: "low" | "medium" | "high";
   resolution?: "1k" | "2k" | "4k";
+  // How many ad variations to produce from this one prompt (Higgsfield `--batch-size`,
+  // 1..20 — each is its own billable job, run as one job set).
+  variants?: number;
 }
 
-// Generate one branded DTC ad. Higgsfield's backend writes the copy and bakes it
-// into the image from (prompt + format + brand kit + reference product image).
-export async function runDtcAd(input: DtcAdInput): Promise<{ imageBase64: string; imageUrl: string }> {
+// Generate one or more branded DTC ad variations from the same prompt. Higgsfield's
+// backend writes the copy and bakes it into the image from (prompt + format + brand
+// kit + reference product image(s)).
+export async function runDtcAd(input: DtcAdInput): Promise<{ images: DtcAdImage[] }> {
+  const batchSize = Math.min(Math.max(Math.trunc(input.variants ?? 1), 1), 20);
   const args = [
     "marketing-studio", "dtc-ads", "generate",
     "--prompt", input.prompt,
@@ -115,18 +134,26 @@ export async function runDtcAd(input: DtcAdInput): Promise<{ imageBase64: string
     "--aspect-ratio", input.aspectRatio ?? "1:1",
     "--quality", input.quality ?? "low",
     "--resolution", input.resolution ?? "1k",
+    "--batch-size", String(batchSize),
     "--wait", "--json",
   ];
   for (const mediaId of input.mediaIds) args.push("--media", `${mediaId}:image`);
   if (input.brandKitId) args.push("--brand-kit-id", input.brandKitId);
 
   const out = await higgsfield(...args);
-  // `dtc-ads generate --json` returns an array of job objects (one per batch item),
-  // each with a top-level `result_url`. Verified against a live run.
+  // `dtc-ads generate --json` returns an array of job objects — one per batch-size
+  // unit, each an independently completed job with its own top-level `result_url`.
+  // Verified against a live `--batch-size 2` run (two distinct ids + result_urls).
   const parsed = JSON.parse(out);
-  const job = Array.isArray(parsed) ? parsed[0] : parsed;
-  const resultUrl: string | undefined =
-    job?.result_url ?? job?.url ?? job?.results?.[0]?.url ?? job?.images?.[0]?.url;
-  if (!resultUrl) throw new Error(`No result URL from dtc-ads job. Raw: ${out.slice(0, 500)}`);
-  return { imageBase64: await downloadToBase64(resultUrl), imageUrl: resultUrl };
+  const jobs = Array.isArray(parsed) ? parsed : [parsed];
+  const resultUrls = jobs
+    .map((job) => job?.result_url ?? job?.url ?? job?.results?.[0]?.url ?? job?.images?.[0]?.url)
+    .filter((url): url is string => typeof url === "string" && url.length > 0);
+  if (resultUrls.length === 0) {
+    throw new Error(`No result URLs from dtc-ads job set. Raw: ${out.slice(0, 500)}`);
+  }
+  const images = await Promise.all(
+    resultUrls.map(async (imageUrl) => ({ imageBase64: await downloadToBase64(imageUrl), imageUrl }))
+  );
+  return { images };
 }

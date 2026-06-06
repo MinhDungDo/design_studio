@@ -18,6 +18,8 @@ interface GenerateBody {
   storeUrl?: string;
   brandKitId?: string;
   stages?: string[];
+  // How many ad variations to generate per awareness-stage lane (default 1).
+  variantsPerLane?: number;
 }
 
 export async function POST(req: NextRequest) {
@@ -58,7 +60,12 @@ export async function POST(req: NextRequest) {
         const stages = requested.length > 0 ? requested : [...AWARENESS_STAGES];
 
         const productDetails = body.productDetails?.trim() || undefined;
-        for await (const progress of runSwarm({ offer, productDetails, brief, formatId, brandKitId, mediaIds }, stages)) {
+        // Clamp to a sane range — each variant is its own billable Higgsfield job.
+        const variantsPerLane = Math.min(Math.max(Math.trunc(body.variantsPerLane ?? 1), 1), 4);
+        for await (const progress of runSwarm(
+          { offer, productDetails, brief, formatId, brandKitId, mediaIds, variantsPerLane },
+          stages
+        )) {
           send(progress);
         }
       } catch (err) {

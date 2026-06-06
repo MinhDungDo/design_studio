@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(higgsfield generate *)",
+      "Bash(python3 -c ' *)",
+      "Bash(node -e ' *)",
+      "Bash(rm -f batch_test_output.json batch_test_err.txt)",
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(npm run *)",
+      "Bash(echo \"started, pid $!\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:3210/version)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:3211)",
+      "Bash(npx convex *)",
+      "Bash(node test_multivariant.mjs)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(curl -s http://localhost:3000/api/formats)",
+      "Bash(grep -m1 '\"execa\"' package.json package-lock.json)",
+      "Bash(ls node_modules/execa)",
+      "Bash(npm install *)",
+      "Bash(rm -f test_multivariant.log)",
+      "PowerShell(Get-Process -Id 13900,33356 -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId=13900 or ProcessId=33356\")",
+      "Bash(node test_execa_repro.mjs)",
+      "Bash(tee test_execa_repro.log)",
+      "Bash(tee test_multivariant.log)",
+      "Bash(netstat -ano)",
+      "Bash(findstr \":3000\")",
+      "Bash(findstr \"LISTENING\")"
+    ]
+  }
+}

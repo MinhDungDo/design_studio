@@ -17,7 +17,10 @@ export interface GenerateFormData {
   storeUrl?: string;
   assetUrls: string[];
   stages: AwarenessStage[];
+  variantsPerLane: number;
 }
+
+const VARIANT_OPTIONS = [1, 2, 3, 4];
 
 interface AdFormatOption {
   id: string;
@@ -55,6 +58,7 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
   const [formats, setFormats] = useState<AdFormatOption[]>([]);
   const [formatId, setFormatId] = useState("");
   const [stages, setStages] = useState<AwarenessStage[]>(DEFAULT_STAGES);
+  const [variantsPerLane, setVariantsPerLane] = useState(1);
   const [uploading, setUploading] = useState(false);
 
   // Load the DTC ad-format catalog for the picker.
@@ -79,19 +83,22 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
     });
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
     setUploading(true);
     try {
-      const postUrl = await generateUploadUrl();
-      const res = await fetch(postUrl, {
-        method: "POST",
-        headers: { "Content-Type": file.type },
-        body: file,
-      });
-      const { storageId } = await res.json();
-      await saveAsset({ storageId, name: file.name, kind: "product" });
+      // Sequential: each is its own Convex mutation pair (upload URL → save row).
+      for (const file of files) {
+        const postUrl = await generateUploadUrl();
+        const res = await fetch(postUrl, {
+          method: "POST",
+          headers: { "Content-Type": file.type },
+          body: file,
+        });
+        const { storageId } = await res.json();
+        await saveAsset({ storageId, name: file.name, kind: "product" });
+      }
     } finally {
       setUploading(false);
     }
@@ -114,6 +121,7 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
       storeUrl: storeUrl.trim() || undefined,
       assetUrls: selectedUrls,
       stages,
+      variantsPerLane,
     });
   };
 
@@ -164,6 +172,7 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
             <input
               type="file"
               accept="image/png,image/jpeg,image/webp"
+              multiple
               className="hidden"
               onChange={handleUpload}
               disabled={isGenerating || uploading}
@@ -171,7 +180,8 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
           </label>
         </div>
         <p className="text-white/25 text-xs mt-1">
-          Your brand/product image library. Selected images are used as references — the product stays intact in every ad.
+          Your brand/product image library — upload several at once. Select multiple to send them
+          all as references for one ad (the product stays intact in every generation).
         </p>
       </div>
 
@@ -225,7 +235,9 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
       <div>
         <label className={labelClass}>
           Awareness Stages{" "}
-          <span className="text-white/25 normal-case tracking-normal">{stages.length} selected — one ad each</span>
+          <span className="text-white/25 normal-case tracking-normal">
+            {stages.length} selected — {variantsPerLane === 1 ? "one ad each" : `${variantsPerLane} ads each`}
+          </span>
         </label>
         <div className="flex flex-wrap gap-2">
           {AWARENESS_STAGES.map((stage) => {
@@ -247,6 +259,38 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
             );
           })}
         </div>
+      </div>
+
+      {/* Variations per lane */}
+      <div>
+        <label className={labelClass}>
+          Variations Per Ad{" "}
+          <span className="text-white/25 normal-case tracking-normal">
+            {variantsPerLane === 1 ? "1 image per stage" : `${variantsPerLane} images per stage — pick the best`}
+          </span>
+        </label>
+        <div className="flex gap-2">
+          {VARIANT_OPTIONS.map((n) => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => setVariantsPerLane(n)}
+              disabled={isGenerating}
+              className={`flex-1 text-xs px-3 py-2 rounded-lg border transition-all ${
+                variantsPerLane === n
+                  ? "border-[#ff4d00]/60 bg-[#ff4d00]/10 text-white"
+                  : "border-white/10 bg-white/5 text-white/40 hover:text-white/70"
+              }`}
+            >
+              {n}×
+            </button>
+          ))}
+        </div>
+        <p className="text-white/25 text-xs mt-1">
+          Each variation is its own Higgsfield job — {stages.length} stage{stages.length === 1 ? "" : "s"} ×{" "}
+          {variantsPerLane} variation{variantsPerLane === 1 ? "" : "s"} = {stages.length * variantsPerLane} generation
+          {stages.length * variantsPerLane === 1 ? "" : "s"} this run.
+        </p>
       </div>
 
       {/* Optional store URL → brand kit */}
@@ -272,10 +316,10 @@ export default function InputForm({ onSubmit, isGenerating }: Props) {
         {isGenerating ? (
           <span className="flex items-center justify-center gap-2">
             <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            Generating {stages.length} ads…
+            Generating {stages.length * variantsPerLane} ad{stages.length * variantsPerLane === 1 ? "" : "s"}…
           </span>
         ) : (
-          `Generate ${stages.length} Ad${stages.length === 1 ? "" : "s"} →`
+          `Generate ${stages.length * variantsPerLane} Ad${stages.length * variantsPerLane === 1 ? "" : "s"} →`
         )}
       </button>
     </form>
