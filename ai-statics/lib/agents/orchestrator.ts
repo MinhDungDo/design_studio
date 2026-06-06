@@ -1,6 +1,7 @@
 import { AwarenessStage, AWARENESS_STAGES } from "./awareness";
-import { runBrain, BrainInputs, ImageInput } from "./brain";
+import { runBrainBatch, BrainInputs, FinalDirection, ImageInput } from "./brain";
 import { renderGptImage2 } from "./higgsfield";
+import { timingLog } from "./timingLog";
 
 export interface GenerationInput {
   // The agent system prompt (content/BRIEF.md), read once by the route.
@@ -22,8 +23,7 @@ export interface GenerationInput {
 // One finished ad for one awareness stage.
 export interface AdResult {
   laneId: AwarenessStage;
-  imageBase64: string;
-  imageUrl?: string;
+  imageUrl: string;
   headline: string;
   subline?: string;
   caption: string;
@@ -46,27 +46,13 @@ type Emit = (step: ProgressStep) => void;
 async function runLane(
   input: GenerationInput,
   stage: AwarenessStage,
+  direction: FinalDirection,
   emit: Emit
 ): Promise<AdResult> {
-  const inputs: BrainInputs = {
-    productBrief: input.productBrief,
-    brandKit: input.brandKit,
-    customerReviews: input.customerReviews,
-    referenceAds: input.referenceAds,
-  };
-
-  emit({ step: "brain", status: "running", laneId: stage });
-  const direction = await runBrain({
-    brief: input.brief,
-    inputs,
-    stage,
-    productImages: input.productImages,
-    benchmarkImages: input.benchmarkImages,
-  });
-  emit({ step: "brain", status: "done", laneId: stage });
-
+  const startedAt = Date.now();
+  timingLog("swarm", "lane:render:start", { stage });
   emit({ step: "imageGen", status: "running", laneId: stage });
-  const { imageBase64, imageUrl } = await renderGptImage2({
+  const { imageUrl } = await renderGptImage2({
     prompt: direction.finalImagePrompt,
     negativePrompt: direction.negativePrompt,
     mediaIds: input.mediaIds,
@@ -76,10 +62,10 @@ async function runLane(
     resolution: (process.env.RENDER_RESOLUTION as "1k" | "2k" | "4k") || "1k",
   });
   emit({ step: "imageGen", status: "done", laneId: stage });
+  timingLog("swarm", "lane:render:done", { stage, elapsedMs: Date.now() - startedAt });
 
   return {
     laneId: stage,
-    imageBase64,
     imageUrl,
     headline: direction.headline,
     subline: direction.subline,
@@ -107,18 +93,39 @@ export async function* runSwarm(
   };
 
   const concurrency = Number(process.env.SWARM_CONCURRENCY) || Math.min(stages.length, 3);
+  timingLog("swarm", "start", { stages, concurrency });
   let next = 0;
   let active = 0;
   let finished = 0;
 
   emit({ step: "swarmStart", lanes: stages });
 
+  for (const stage of stages) emit({ step: "brain", status: "running", laneId: stage });
+  while (queue.length > 0) yield queue.shift()!;
+
+  const inputs: BrainInputs = {
+    productBrief: input.productBrief,
+    brandKit: input.brandKit,
+    customerReviews: input.customerReviews,
+    referenceAds: input.referenceAds,
+  };
+  const brainStartedAt = Date.now();
+  const directions = await runBrainBatch({
+    brief: input.brief,
+    inputs,
+    stages,
+    productImages: input.productImages,
+    benchmarkImages: input.benchmarkImages,
+  });
+  timingLog("swarm", "brain:done", { elapsedMs: Date.now() - brainStartedAt });
+  for (const stage of stages) emit({ step: "brain", status: "done", laneId: stage });
+
   const launch = () => {
     while (active < concurrency && next < stages.length) {
       const stage = stages[next++];
       active++;
       emit({ step: "laneStart", laneId: stage });
-      runLane(input, stage, emit)
+      runLane(input, stage, directions[stage], emit)
         .then((result) => emit({ step: "laneComplete", laneId: stage, result }))
         .catch((err) =>
           emit({
