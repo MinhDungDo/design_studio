@@ -1,84 +1,146 @@
-import { runStrategyAgent, StrategyOutput } from "./strategyAgent";
-import { runCopyAgent, CopyOutput } from "./copyAgent";
-import { runImagePromptAgent, ImagePromptOutput } from "./imagePromptAgent";
-import { runImageGenerator, ProductImageInput } from "./imageGenerator";
-import { runAdScorer, AdScorerOutput } from "./adScorer";
+import { AwarenessStage, AWARENESS_STAGES } from "./awareness";
+import { runBrain, BrainInputs, ImageInput } from "./brain";
+import { renderGptImage2 } from "./higgsfield";
 
 export interface GenerationInput {
-  productBrief?: string;
+  // The agent system prompt (content/BRIEF.md), read once by the route.
+  brief: string;
+  // Per-run product inputs from the form.
+  productBrief: string;
   brandKit?: string;
   customerReviews?: string;
   referenceAds?: string;
-  productImage: ProductImageInput;
+  // Reference images as base64 for the brain (multimodal).
+  productImages: ImageInput[];
+  benchmarkImages: ImageInput[];
+  // Higgsfield upload ids for the PRODUCT image(s) — for gpt_image_2 --image.
+  mediaIds: string[];
+  // Which awareness stages to fan out into (one ad per stage). Defaults to all.
+  stages?: AwarenessStage[];
 }
 
-export interface GenerationResult {
-  strategy: StrategyOutput;
-  copy: CopyOutput;
-  imagePrompt: ImagePromptOutput;
+// One finished ad for one awareness stage.
+export interface AdResult {
+  laneId: AwarenessStage;
   imageBase64: string;
-  scorer: AdScorerOutput;
+  imageUrl?: string;
+  headline: string;
+  subline?: string;
+  caption: string;
 }
 
+// Each per-lane step carries laneId so the UI routes it to the right column.
 export type ProgressStep =
-  | { step: "strategy"; status: "running" | "done"; data?: StrategyOutput }
-  | { step: "copy"; status: "running" | "done"; data?: CopyOutput }
-  | { step: "imagePrompt"; status: "running" | "done"; data?: ImagePromptOutput }
-  | { step: "imageGen"; status: "running" | "done"; imageBase64?: string }
-  | { step: "scorer"; status: "running" | "done"; data?: AdScorerOutput }
-  | { step: "complete"; result: GenerationResult }
-  | { step: "error"; message: string };
+  | { step: "swarmStart"; lanes: AwarenessStage[] }
+  | { step: "laneStart"; laneId: AwarenessStage }
+  | { step: "brain"; status: "running" | "done"; laneId: AwarenessStage }
+  | { step: "imageGen"; status: "running" | "done"; laneId: AwarenessStage; imageBase64?: string }
+  | { step: "laneComplete"; laneId: AwarenessStage; result: AdResult }
+  | { step: "swarmComplete" }
+  | { step: "error"; laneId?: AwarenessStage; message: string };
 
-export async function* runOrchestrator(
-  input: GenerationInput
+type Emit = (step: ProgressStep) => void;
+
+// One awareness stage: Claude (the "Supercomputer" brain) writes the direction,
+// then Higgsfield gpt_image_2 renders it.
+async function runLane(
+  input: GenerationInput,
+  stage: AwarenessStage,
+  emit: Emit
+): Promise<AdResult> {
+  const inputs: BrainInputs = {
+    productBrief: input.productBrief,
+    brandKit: input.brandKit,
+    customerReviews: input.customerReviews,
+    referenceAds: input.referenceAds,
+  };
+
+  emit({ step: "brain", status: "running", laneId: stage });
+  const direction = await runBrain({
+    brief: input.brief,
+    inputs,
+    stage,
+    productImages: input.productImages,
+    benchmarkImages: input.benchmarkImages,
+  });
+  emit({ step: "brain", status: "done", laneId: stage });
+
+  emit({ step: "imageGen", status: "running", laneId: stage });
+  const { imageBase64, imageUrl } = await renderGptImage2({
+    prompt: direction.finalImagePrompt,
+    negativePrompt: direction.negativePrompt,
+    mediaIds: input.mediaIds,
+    aspectRatio: direction.aspectRatio,
+    // Dev defaults favor speed; bump via env for finals.
+    quality: (process.env.RENDER_QUALITY as "low" | "medium" | "high") || "medium",
+    resolution: (process.env.RENDER_RESOLUTION as "1k" | "2k" | "4k") || "1k",
+  });
+  emit({ step: "imageGen", status: "done", laneId: stage, imageBase64 });
+
+  return {
+    laneId: stage,
+    imageBase64,
+    imageUrl,
+    headline: direction.headline,
+    subline: direction.subline,
+    caption: direction.caption,
+  };
+}
+
+// Fan out across awareness stages; merge every lane's progress into one ordered
+// stream. Lanes run concurrently (capped by SWARM_CONCURRENCY). Each lane is one
+// Claude call + one billable Higgsfield render.
+export async function* runSwarm(
+  input: GenerationInput,
+  stages: AwarenessStage[] = [...AWARENESS_STAGES]
 ): AsyncGenerator<ProgressStep> {
-  try {
-    // Step 1: Strategy
-    yield { step: "strategy", status: "running" };
-    const strategy = await runStrategyAgent(input);
-    yield { step: "strategy", status: "done", data: strategy };
+  const queue: ProgressStep[] = [];
+  let notify: (() => void) | null = null;
+  const wake = () => {
+    const f = notify;
+    notify = null;
+    f?.();
+  };
+  const emit: Emit = (step) => {
+    queue.push(step);
+    wake();
+  };
 
-    // Step 2: Copy + Image Prompt in parallel
-    yield { step: "copy", status: "running" };
-    yield { step: "imagePrompt", status: "running" };
+  const concurrency = Number(process.env.SWARM_CONCURRENCY) || Math.min(stages.length, 3);
+  let next = 0;
+  let active = 0;
+  let finished = 0;
 
-    const [copy, imagePrompt] = await Promise.all([
-      runCopyAgent({ strategy, brandKit: input.brandKit, productBrief: input.productBrief }),
-      runImagePromptAgent({ strategy, brandKit: input.brandKit, productBrief: input.productBrief, copy: { headline: "", subheadline: "", bodyText: "", cta: "" } }),
-    ]);
+  emit({ step: "swarmStart", lanes: stages });
 
-    yield { step: "copy", status: "done", data: copy };
-    yield { step: "imagePrompt", status: "done", data: imagePrompt };
+  const launch = () => {
+    while (active < concurrency && next < stages.length) {
+      const stage = stages[next++];
+      active++;
+      emit({ step: "laneStart", laneId: stage });
+      runLane(input, stage, emit)
+        .then((result) => emit({ step: "laneComplete", laneId: stage, result }))
+        .catch((err) =>
+          emit({
+            step: "error",
+            laneId: stage,
+            message: err instanceof Error ? err.message : "Unknown error",
+          })
+        )
+        .finally(() => {
+          active--;
+          finished++;
+          wake();
+          launch();
+        });
+    }
+  };
+  launch();
 
-    // Step 3: Generate image
-    yield { step: "imageGen", status: "running" };
-    const imageResult = await runImageGenerator(imagePrompt, input.productImage);
-    yield { step: "imageGen", status: "done", imageBase64: imageResult.imageBase64 };
-
-    // Step 4: Score the ad
-    yield { step: "scorer", status: "running" };
-    const scorer = await runAdScorer({
-      strategy,
-      copy,
-      imagePromptUsed: imagePrompt.prompt,
-    });
-    yield { step: "scorer", status: "done", data: scorer };
-
-    // Final result
-    yield {
-      step: "complete",
-      result: {
-        strategy,
-        copy,
-        imagePrompt,
-        imageBase64: imageResult.imageBase64,
-        scorer,
-      },
-    };
-  } catch (err) {
-    yield {
-      step: "error",
-      message: err instanceof Error ? err.message : "Unknown error occurred",
-    };
+  while (finished < stages.length || queue.length > 0) {
+    if (queue.length === 0) await new Promise<void>((r) => (notify = r));
+    while (queue.length > 0) yield queue.shift()!;
   }
+
+  yield { step: "swarmComplete" };
 }
